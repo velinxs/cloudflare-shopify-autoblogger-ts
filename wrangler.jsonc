@@ -1,0 +1,41 @@
+{
+  "name": "autoblogger-ts",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-05",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "routes": [
+    {
+      "pattern": "api.royalpheromones.com/*",
+      "zone_name": "royalpheromones.com"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ShopifyAutobloggerAgent",
+        "class_name": "ShopifyAutobloggerAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["Chat"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "ShopifyAutobloggerAgent"
+      ],
+      "deleted_classes": [
+        "Chat"
+      ]
+    }
+  ]
+}
