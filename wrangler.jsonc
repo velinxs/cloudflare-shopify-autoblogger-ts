@@ -37,5 +37,14 @@
         "Chat"
       ]
     }
-  ]
+  ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE_INDEX",
+      "index_name": "autoblogger-content-index"
+    }
+  ],
+  "ai": {
+    "binding": "AI"
+  }
 }

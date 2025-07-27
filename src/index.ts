@@ -7,8 +7,9 @@ import { PersonaManager, AuthorPersona } from './personas';
 import { WebResearcher } from './researcher';
 import { KeywordManager, Keyword } from './keywords';
 import { ProductIntegrator } from './integrator';
-
+import { syncPosts } from './content-sync';
 import { fetchAllSiteUrls } from './sitemap';
+
 
 // --- Type Definitions ---
 
@@ -18,6 +19,9 @@ interface Env {
   SHOPIFY_ACCESS_TOKEN: string;
   SHOPIFY_SHOP_URL: string;
   API_KEY: string; // Secret for securing the worker
+  VECTORIZE_INDEX: VectorizeIndex;
+  BROWSER: Fetcher;
+  AI: any;
 }
 
 interface AgentState {
@@ -139,13 +143,20 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
     async generateBlogContent(topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', persona: AuthorPersona) {
         const researchData = await this.researcher.researchTopic(topic, researchDepth);
         
-        // Fetch all site URLs from sitemaps for a comprehensive linking strategy
-        const siteUrls = await fetchAllSiteUrls();
-        const allLinks = [
-            ...siteUrls.blogPosts.map(p => p.loc),
-            ...siteUrls.products.map(p => p.loc),
-            ...siteUrls.collections.map(p => p.loc),
-        ];
+        // Generate an embedding for the new topic to find similar articles
+        const embeddingResponse = await this.env.AI.run('@cf/baai/bge-base-en-v1.5', {
+          text: [topic]
+        });
+        const topicEmbedding = embeddingResponse.data[0];
+
+        // Query Vectorize for the most similar articles
+        const similarArticles = await this.env.VECTORIZE_INDEX.query(topicEmbedding, { topK: 7 });
+        const internalLinks = similarArticles.matches.map(match => ({
+            url: match.vector.metadata.url,
+            title: match.vector.metadata.title,
+            primaryKeyword: match.vector.metadata.primaryKeyword, // Pass the primary keyword to the prompt
+            score: match.score,
+        }));
 
         const systemPrompt = `
 You are a ghostwriter, fully embodying the persona of ${persona.name}. Your task is to write a comprehensive, SEO-optimized, 1500-word blog post for the Royal Pheromones blog on the topic of "${topic}".
@@ -165,9 +176,9 @@ ${JSON.stringify(researchData.research_content)}
 </research>
 
 **Internal Linking Strategy:**
-This is crucial. You must naturally weave in numerous contextual internal links to other pages on the Royal Pheromones site. Here is a complete list of all available pages from the site's sitemaps. Link to at least 5-7 relevant pages (a mix of blog posts, products, and collections) where it provides the most value to the reader.
+This is crucial. You must naturally weave in contextual internal links to other pages on the Royal Pheromones site. Here is a list of the most contextually relevant articles from our blog, identified by a semantic similarity search. Each link includes a 'primaryKeyword' (from its H1 tag). Use this keyword to create natural, context-aware anchor text. Do not just use the full title as the anchor text. Link to at least 3-5 of them where it provides the most value to the reader.
 <links>
-${JSON.stringify(allLinks)}
+${JSON.stringify(internalLinks)}
 </links>
 
 **Content Requirements:**
@@ -247,6 +258,8 @@ ${JSON.stringify(allLinks)}
     }
 }
 
+import { syncPosts } from './content-sync';
+
 // --- Worker Entrypoint ---
 
 export default {
@@ -263,6 +276,15 @@ export default {
       return new Response('Invalid API Key', { status: 403 });
     }
     // --- End Authentication Check ---
+
+    const url = new URL(request.url);
+    if (url.pathname === '/sync-posts' && request.method === 'POST') {
+        // Pass the request to be handled in the background
+        ctx.waitUntil(syncPosts(env));
+        return new Response(JSON.stringify({ success: true, message: 'Content sync process started in the background.' }), {
+            headers: { 'Content-Type': 'application/json' },
+        });
+    }
 
     try {
       const agent = await getAgentByName<Env, ShopifyAutobloggerAgent>(env.ShopifyAutobloggerAgent, 'singleton');
