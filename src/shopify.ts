@@ -14,7 +14,10 @@ const shopifyAPIResponseValidator = z.object({
   blog_id: z.number().optional(),
 });
 
-export type ShopifyProduct = z.infer<typeof shopifyAPIResponseValidator>;
+export type ShopifyProduct = z.infer<typeof shopifyAPIResponseValidator> & {
+    variants: { price: string }[];
+    image: { src: string };
+};
 
 export class ShopifyClient {
   private shopifyToken: string;
@@ -61,6 +64,11 @@ export class ShopifyClient {
 
   async createBlogPost(blogId: number, article: any): Promise<any> {
     return this.makeShopifyRequest(`blogs/${blogId}/articles.json`, 'POST', { article });
+  }
+
+  async getArticles(blogId: number): Promise<any[]> {
+    const response = await this.makeShopifyRequest(`blogs/${blogId}/articles.json`);
+    return response.articles;
   }
 
   async getProducts(): Promise<ShopifyProduct[]> {

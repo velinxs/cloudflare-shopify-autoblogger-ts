@@ -8,6 +8,8 @@ import { WebResearcher } from './researcher';
 import { KeywordManager, Keyword } from './keywords';
 import { ProductIntegrator } from './integrator';
 
+import { fetchAllSiteUrls } from './sitemap';
+
 // --- Type Definitions ---
 
 interface Env {
@@ -105,53 +107,78 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
         return this.shopify.getBlogs();
     }
 
+    /**
+     * Creates and returns the static "Alexa Velinxs" persona.
+     * This ensures a consistent and strong brand voice for the blog.
+     * @returns The Alexa Velinxs persona object.
+     */
+    private getAlexaVelinxsPersona(): AuthorPersona {
+        return {
+            id: "static-alexa-velinxs",
+            name: "Alexa Velinxs",
+            background: "A seasoned biochemist and no-nonsense dating coach who grew disillusioned with mainstream advice. She now focuses on the raw, unfiltered science of attraction and social dynamics.",
+            expertise: ["pheromone science", "attraction psychology", "social dynamics", "dating strategy"],
+            experience_years: "10+",
+            education: "M.S. in Biochemistry",
+            achievements: ["Published research on olfactory signals", "Founder of a successful dating consultancy"],
+            writing_voice: "Direct, witty, and unapologetically honest with a touch of dark humor. She writes for a smart, discerning audience, making complex science accessible and actionable without sugar-coating.",
+            signature_style: "Cuts through the noise with sharp analysis and a confident, slightly provocative tone. Blends scientific evidence with real-world, often blunt, advice.",
+            created_at: new Date().toISOString(),
+            topic_area: "all",
+            style: "informative-edgy"
+        };
+    }
+
     async enhancedAutoBlog(blogId: number, topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', publish: boolean) {
-        const contentData = await this.generateBlogContent(topic, style, wordCount, researchDepth);
+        const persona = this.getAlexaVelinxsPersona();
+        const contentData = await this.generateBlogContent(topic, style, wordCount, researchDepth, persona);
         contentData.keyword = topic;
         return this.createBlogPost(blogId, contentData, publish, topic);
     }
 
-    async generateBlogContent(topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive') {
+    async generateBlogContent(topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', persona: AuthorPersona) {
         const researchData = await this.researcher.researchTopic(topic, researchDepth);
-        const persona = await this.personaManager.getOrCreatePersona(topic, style);
-        this.setState({ ...this.state, personas: this.personaManager.getPersonas() });
+        
+        // Fetch all site URLs from sitemaps for a comprehensive linking strategy
+        const siteUrls = await fetchAllSiteUrls();
+        const allLinks = [
+            ...siteUrls.blogPosts.map(p => p.loc),
+            ...siteUrls.products.map(p => p.loc),
+            ...siteUrls.collections.map(p => p.loc),
+        ];
 
         const systemPrompt = `
 You are a ghostwriter, fully embodying the persona of ${persona.name}. Your task is to write a comprehensive, SEO-optimized, 1500-word blog post for the Royal Pheromones blog on the topic of "${topic}".
 
 **Brand Context:**
-The blog is for Royal Pheromones, a company that sells pheromone colognes. The content should be informative, engaging, and build trust with the reader, while naturally aligning with the company's mission to help people improve their confidence and social lives. The tone should be natural, realistic, and human.
+The blog is for Royal Pheromones. The content must be informative, engaging, and build trust, while aligning with the company's mission. Your writing should be natural, realistic, and human.
 
-**Your Persona:**
-- **Name:** ${persona.name}
+**Your Persona: Alexa Velinxs**
 - **Background:** ${persona.background}
-- **Expertise:** ${persona.expertise}
-- **Writing Voice & Style:** ${persona.writing_voice}. ${persona.signature_style}
+- **Expertise:** ${persona.expertise.join(', ')}
+- **Writing Voice & Style:** ${persona.writing_voice} ${persona.signature_style}
 
 **Primary Source Material:**
-You MUST use the following web research as the primary source for your article. Ground your writing in the facts, data, and insights from this research to create an authoritative and well-supported piece.
+You MUST use the following web research as the primary source for your article.
 <research>
 ${JSON.stringify(researchData.research_content)}
 </research>
 
+**Internal Linking Strategy:**
+This is crucial. You must naturally weave in numerous contextual internal links to other pages on the Royal Pheromones site. Here is a complete list of all available pages from the site's sitemaps. Link to at least 5-7 relevant pages (a mix of blog posts, products, and collections) where it provides the most value to the reader.
+<links>
+${JSON.stringify(allLinks)}
+</links>
+
 **Content Requirements:**
-1.  **Length:** The article must be approximately 1500 words.
-2.  **SEO Optimization:**
-    - The primary keyword "${topic}" should appear naturally throughout the article.
-    - Include related secondary keywords and long-tail variations found in the research.
-    - Structure the article with a main H1 title, followed by H2 and H3 subheadings.
-    - Write a compelling, SEO-friendly meta description of 150-160 characters.
-3.  **Formatting:**
-    - The entire output must be a single JSON object.
-    - The 'content' field should be a single Markdown string.
-4.  **Tone and Style:**
-    - Write from the first-person perspective of your persona ("I", "my").
-    - Infuse the writing with your persona's unique voice and expertise.
+1.  **Length:** ~1500 words.
+2.  **SEO:** Use "${topic}" as the primary keyword. Include related keywords from your research. Use a clear heading structure (H1, H2, H3).
+3.  **Formatting:** The 'content' field must be a single Markdown string.
+4.  **Tone:** Write from your persona's first-person perspective ("I", "my").
 
 **JSON Output Structure:**
-Return a single JSON object with the following keys:
-- "title": A compelling, SEO-friendly title.
-- "meta_description": A 150-160 character meta description.
+- "title": SEO-friendly title.
+- "meta_description": 150-160 character meta description.
 - "content": The full 1500-word blog post as a single Markdown string.
 - "tags": An array of 5-7 relevant SEO tags.
 `;
@@ -187,28 +214,34 @@ Return a single JSON object with the following keys:
     async createBlogPost(blogId: number, contentData: any, published: boolean, topic: string) {
         console.log('Content received from OpenAI:', JSON.stringify(contentData, null, 2));
         
-        // Convert the markdown content to an HTML string
-        const htmlContent = this.markdownToHtml(contentData.content);
-        let enhancedContent = htmlContent;
+        // 1. Convert the markdown content to an HTML string for product integration context
+        const markdownContent = contentData.content;
+        let enhancedContent = markdownContent;
 
-        // Always find at least one product to integrate.
-        const products = await this.productIntegrator.findRelevantProducts(contentData.keyword, htmlContent.substring(0, 500), 1);
+        // 2. Add product ad contextually using AI
+        const products = await this.productIntegrator.findRelevantProducts(contentData.keyword, markdownContent.substring(0, 500), 1);
         if (products.length > 0) {
             enhancedContent = await this.productIntegrator.generateContextualProductPlacement(enhancedContent, products);
         } else {
-            console.warn(`No relevant products found for keyword: ${contentData.keyword}. A generic product link may be added.`);
-            // Optional: Add a fallback to a generic best-seller or category page if no specific product is found.
+            console.warn(`No relevant products found for keyword: ${contentData.keyword}.`);
         }
         
+        // 4. Convert the final Markdown to HTML for Shopify
+        const finalHtmlContent = this.markdownToHtml(enhancedContent);
+
         const articlePayload = {
             ...contentData,
             title: contentData.title || topic, // Fallback to topic if title is missing
-            body_html: enhancedContent,
+            body_html: finalHtmlContent,
             published
         };
         const article = await this.shopify.createBlogPost(blogId, articlePayload);
+        
+        // 5. Mark keyword as used with the new article URL
         if (article && article.id && contentData.keyword) {
-            await this.keywordManager.markKeywordUsed(contentData.keyword, article.id.toString(), article.handle);
+            // Assuming a standard Shopify URL structure
+            const articleUrl = `https://royalpheromones.com/blogs/articles/${article.handle}`;
+            await this.keywordManager.markKeywordUsed(contentData.keyword, article.id.toString(), articleUrl);
         }
         return article;
     }
