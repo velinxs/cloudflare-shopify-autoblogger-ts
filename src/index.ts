@@ -108,7 +108,7 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
     async enhancedAutoBlog(blogId: number, topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', publish: boolean) {
         const contentData = await this.generateBlogContent(topic, style, wordCount, researchDepth);
         contentData.keyword = topic;
-        return this.createBlogPost(blogId, contentData, publish);
+        return this.createBlogPost(blogId, contentData, publish, topic);
     }
 
     async generateBlogContent(topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive') {
@@ -116,10 +116,49 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
         const persona = await this.personaManager.getOrCreatePersona(topic, style);
         this.setState({ ...this.state, personas: this.personaManager.getPersonas() });
 
-        const systemPrompt = `You are ${persona.name}, a professional content writer... Return your response as a JSON object with a 'title' field (string) and a 'content' field (an array of objects, each with a 'heading' and a 'paragraph').`;
+        const systemPrompt = `
+You are a ghostwriter, fully embodying the persona of ${persona.name}. Your task is to write a comprehensive, SEO-optimized, 1500-word blog post for the Royal Pheromones blog on the topic of "${topic}".
+
+**Brand Context:**
+The blog is for Royal Pheromones, a company that sells pheromone colognes. The content should be informative, engaging, and build trust with the reader, while naturally aligning with the company's mission to help people improve their confidence and social lives. The tone should be natural, realistic, and human.
+
+**Your Persona:**
+- **Name:** ${persona.name}
+- **Background:** ${persona.background}
+- **Expertise:** ${persona.expertise}
+- **Writing Voice & Style:** ${persona.writing_voice}. ${persona.signature_style}
+
+**Primary Source Material:**
+You MUST use the following web research as the primary source for your article. Ground your writing in the facts, data, and insights from this research to create an authoritative and well-supported piece.
+<research>
+${JSON.stringify(researchData.research_content)}
+</research>
+
+**Content Requirements:**
+1.  **Length:** The article must be approximately 1500 words.
+2.  **SEO Optimization:**
+    - The primary keyword "${topic}" should appear naturally throughout the article.
+    - Include related secondary keywords and long-tail variations found in the research.
+    - Structure the article with a main H1 title, followed by H2 and H3 subheadings.
+    - Write a compelling, SEO-friendly meta description of 150-160 characters.
+3.  **Formatting:**
+    - The entire output must be a single JSON object.
+    - The 'content' field should be a single Markdown string.
+4.  **Tone and Style:**
+    - Write from the first-person perspective of your persona ("I", "my").
+    - Infuse the writing with your persona's unique voice and expertise.
+
+**JSON Output Structure:**
+Return a single JSON object with the following keys:
+- "title": A compelling, SEO-friendly title.
+- "meta_description": A 150-160 character meta description.
+- "content": The full 1500-word blog post as a single Markdown string.
+- "tags": An array of 5-7 relevant SEO tags.
+`;
+
         const response = await this.openai.chat.completions.create({
             model: 'gpt-4.1-mini',
-            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: `Write the blog post about ${topic}` }],
+            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: `Write the blog post about ${topic}, ensuring it is at least 1500 words and follows all instructions.` }],
             response_format: { type: 'json_object' },
         });
         const content = JSON.parse(response.choices[0].message.content || '{}');
@@ -127,44 +166,40 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
     }
 
     /**
-     * Converts the structured content array from OpenAI into an HTML string.
-     * @param content The array of content objects.
+     * Converts a Markdown string into a basic HTML string.
+     * @param markdown The Markdown content from OpenAI.
      * @returns An HTML string.
      */
-    private contentArrayToHtml(content: any[]): string {
-        if (!Array.isArray(content)) {
-            // If it's not an array, stringify it as a fallback.
-            return typeof content === 'string' ? content : JSON.stringify(content);
+    private markdownToHtml(markdown: string): string {
+        if (typeof markdown !== 'string') {
+            return JSON.stringify(markdown); // Fallback for unexpected types
         }
-        return content.map(item => {
-            let block = '';
-            if (item.heading) {
-                block += `<h2>${item.heading}</h2>`;
-            }
-            if (item.paragraph) {
-                block += `<p>${item.paragraph}</p>`;
-            }
-            return block;
-        }).join('');
+        return markdown
+            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+            .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+            .replace(/\*(.*)\*/gim, '<em>$1</em>')
+            .replace(/\[([^\]]+)\]\(([^)]+)\)/gim, '<a href="$2">$1</a>')
+            .replace(/\n/gim, '<br>');
     }
 
-    async createBlogPost(blogId: number, contentData: any, published: boolean) {
+    async createBlogPost(blogId: number, contentData: any, published: boolean, topic: string) {
         console.log('Content received from OpenAI:', JSON.stringify(contentData, null, 2));
         
-        // Convert the content array to an HTML string
-        const htmlContent = this.contentArrayToHtml(contentData.content);
+        // Convert the markdown content to an HTML string
+        const htmlContent = this.markdownToHtml(contentData.content);
         let enhancedContent = htmlContent;
 
-        if (contentData.keyword) {
-            try {
-              const products = await this.productIntegrator.findRelevantProducts(contentData.keyword, htmlContent.substring(0, 500));
-              if (products.length > 0) {
-                  enhancedContent = await this.productIntegrator.generateContextualProductPlacement(enhancedContent, products);
-              }
-            } catch (e) {
-              console.error('Error finding relevant products:', e);
-            }
+        // Always find at least one product to integrate.
+        const products = await this.productIntegrator.findRelevantProducts(contentData.keyword, htmlContent.substring(0, 500), 1);
+        if (products.length > 0) {
+            enhancedContent = await this.productIntegrator.generateContextualProductPlacement(enhancedContent, products);
+        } else {
+            console.warn(`No relevant products found for keyword: ${contentData.keyword}. A generic product link may be added.`);
+            // Optional: Add a fallback to a generic best-seller or category page if no specific product is found.
         }
+        
         const articlePayload = {
             ...contentData,
             title: contentData.title || topic, // Fallback to topic if title is missing
