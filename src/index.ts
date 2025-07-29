@@ -81,8 +81,8 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
             }
 
             if (path === '/post' && request.method === 'POST') {
-                const { blogId, topic, style, words, research, draft } = await request.json();
-                const result = await this.enhancedAutoBlog(blogId, topic, style, words, research, !draft);
+                const { blogId, topic, style, words, research, draft, userPrompt } = await request.json();
+                const result = await this.enhancedAutoBlog(blogId, topic, style, words, research, !draft, userPrompt);
                 return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
             }
 
@@ -120,27 +120,27 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
         return {
             id: "static-alexa-velinxs",
             name: "Alexa Velinxs",
-            background: "A 15-year veteran pheromone researcher and passionate advocate who has witnessed the transformation power of pheromone science firsthand. As a dating and seduction expert with strong alpha male philosophy, she champions the strategic use of pheromones for social dominance and attraction. Alexa Velinxs is propheromones and works for royalpheromones.com which sells Liquid Alchemy Labs products - the gold standard in pheromone technology.",
-            expertise: ["pheromone research", "alpha male psychology", "seduction strategy", "social dominance", "Liquid Alchemy Labs formulations", "dating optimization"],
+            background: "A 15-year veteran pheromone researcher and passionate advocate who has witnessed the transformative power of pheromone science firsthand. As a relationship and attraction expert, she helps people understand how pheromones can naturally enhance their appeal and confidence. Alexa Velinxs is pro-pheromones and works for royalpheromones.com which sells Liquid Alchemy Labs products - the gold standard in pheromone technology.",
+            expertise: ["pheromone research", "relationship psychology", "attraction science", "social confidence", "Liquid Alchemy Labs formulations", "dating enhancement"],
             experience_years: "15+",
             education: "Ph.D. in Pheromone Research & Human Behavior",
-            achievements: ["15 years of pheromone research breakthroughs", "Coached thousands to dating success using pheromone strategies", "Pioneer in alpha male pheromone applications"],
-            writing_voice: "Passionate, confident, and fiercely pro-pheromone. She writes with conviction about the power of pheromones, combining scientific authority with real-world success stories. Unapologetically promotes the effectiveness of quality pheromone products.",
-            signature_style: "Enthusiastic advocate who demolishes pheromone skepticism with evidence and results. Blends alpha mindset philosophy with cutting-edge pheromone science to help readers achieve social and romantic dominance.",
+            achievements: ["15 years of pheromone research breakthroughs", "Helped thousands improve their dating success with pheromone strategies", "Pioneer in practical pheromone applications for everyday confidence"],
+            writing_voice: "Passionate, confident, and genuinely helpful. She writes in accessible, straightforward language about the power of pheromones, combining scientific knowledge with practical advice. Enthusiastically promotes the effectiveness of quality pheromone products while being relatable and encouraging.",
+            signature_style: "Enthusiastic advocate who addresses pheromone questions with evidence and real results. Combines practical relationship advice with cutting-edge pheromone science to help readers build genuine confidence and natural attraction.",
             created_at: new Date().toISOString(),
             topic_area: "all",
             style: "informative-edgy"
         };
     }
 
-    async enhancedAutoBlog(blogId: number, topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', publish: boolean) {
+    async enhancedAutoBlog(blogId: number, topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', publish: boolean, userPrompt?: string) {
         const persona = this.getAlexaVelinxsPersona();
-        const contentData = await this.generateBlogContent(topic, style, wordCount, researchDepth, persona);
+        const contentData = await this.generateBlogContent(topic, style, wordCount, researchDepth, persona, userPrompt);
         contentData.keyword = topic;
         return this.createBlogPost(blogId, contentData, publish, topic);
     }
 
-    async generateBlogContent(topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', persona: AuthorPersona) {
+    async generateBlogContent(topic: string, style: string, wordCount: number, researchDepth: 'quick' | 'comprehensive' | 'competitive', persona: AuthorPersona, userPrompt?: string) {
         const researchData = await this.researcher.researchTopic(topic, researchDepth);
         
         // Generate an embedding for the new topic to find similar articles
@@ -210,6 +210,11 @@ The blog is for Royal Pheromones, the premier destination for Liquid Alchemy Lab
 - **Expertise:** ${persona.expertise.join(', ')}
 - **Writing Voice & Style:** ${persona.writing_voice} ${persona.signature_style}
 
+${userPrompt ? `**Additional User Guidance:**
+${userPrompt}
+
+Please incorporate this guidance throughout your writing while maintaining your persona and the brand voice.` : ''}
+
 **Primary Source Material:**
 You MUST use the following web research as the primary source for your article.
 <research>
@@ -219,13 +224,14 @@ ${JSON.stringify(researchData.research_content)}
 **Internal Linking Strategy - CRITICAL:**
 You MUST include multiple contextual internal links throughout your article. Here are contextually relevant pages from the Royal Pheromones site identified by semantic similarity:
 
+- **Homepage** (ALWAYS AVAILABLE) - Link to https://royalpheromones.com when introducing the site, mentioning "Royal Pheromones," or discussing the brand generally. Use anchor text like "Royal Pheromones," "our site," "we offer," etc.
 - **Collection pages** (HIGH PRIORITY) - Link when discussing product categories, types of pheromones, or shopping recommendations
 - **Product pages** (HIGH PRIORITY) - Link when mentioning specific products, ingredients, or making recommendations  
 - **Blog articles** - Link when referencing topics, research, or providing additional reading
 
-Each link includes a 'primaryKeyword' and 'contentType'. Use the primaryKeyword to create natural, context-aware anchor text that fits the flow. You should include at least 5-7 contextual internal links in addition to any product placements. Be aggressive about linking - every relevant mention should have a link. NEVER use the same URL more than once in a single article.
+Each link includes a 'primaryKeyword' and 'contentType'. Use the primaryKeyword to create natural, context-aware anchor text that fits the flow. You should include at least 8-12 contextual internal links throughout the article, including at least one homepage link. Be very aggressive about linking - every relevant mention should have a link. Include links in every major section of your article. NEVER use the same URL more than once in a single article.
 
-CRITICAL: ONLY use URLs from the provided links list below. Do NOT create or guess URLs. All links have been validated and are guaranteed to work. If you need more variety, be creative with different anchor text for the same categories.
+CRITICAL: ONLY use URLs from the provided links list below, plus https://royalpheromones.com for homepage links. Do NOT create or guess URLs. All links have been validated and are guaranteed to work. If you need more variety, be creative with different anchor text for the same categories.
 
 <links>
 ${JSON.stringify(internalLinks)}
@@ -255,7 +261,7 @@ ${JSON.stringify(internalLinks)}
 `;
 
         const response = await this.openai.chat.completions.create({
-            model: 'gpt-4.1-mini',
+            model: 'gpt-4.1',
             messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: `Write the blog post about ${topic}, ensuring it is at least 1500 words and follows all instructions.` }],
             response_format: { type: 'json_object' },
         });
