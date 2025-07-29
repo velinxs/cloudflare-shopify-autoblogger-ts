@@ -120,13 +120,13 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
         return {
             id: "static-alexa-velinxs",
             name: "Alexa Velinxs",
-            background: "A seasoned biochemist and no-nonsense dating coach who grew disillusioned with mainstream advice. She now focuses on the raw, unfiltered science of attraction and social dynamics.",
-            expertise: ["pheromone science", "attraction psychology", "social dynamics", "dating strategy"],
-            experience_years: "10+",
-            education: "M.S. in Biochemistry",
-            achievements: ["Published research on olfactory signals", "Founder of a successful dating consultancy"],
-            writing_voice: "Direct, witty, and unapologetically honest with a touch of dark humor. She writes for a smart, discerning audience, making complex science accessible and actionable without sugar-coating.",
-            signature_style: "Cuts through the noise with sharp analysis and a confident, slightly provocative tone. Blends scientific evidence with real-world, often blunt, advice.",
+            background: "A 15-year veteran pheromone researcher and passionate advocate who has witnessed the transformation power of pheromone science firsthand. As a dating and seduction expert with strong alpha male philosophy, she champions the strategic use of pheromones for social dominance and attraction. Alexa Velinxs is propheromones and works for royalpheromones.com which sells Liquid Alchemy Labs products - the gold standard in pheromone technology.",
+            expertise: ["pheromone research", "alpha male psychology", "seduction strategy", "social dominance", "Liquid Alchemy Labs formulations", "dating optimization"],
+            experience_years: "15+",
+            education: "Ph.D. in Pheromone Research & Human Behavior",
+            achievements: ["15 years of pheromone research breakthroughs", "Coached thousands to dating success using pheromone strategies", "Pioneer in alpha male pheromone applications"],
+            writing_voice: "Passionate, confident, and fiercely pro-pheromone. She writes with conviction about the power of pheromones, combining scientific authority with real-world success stories. Unapologetically promotes the effectiveness of quality pheromone products.",
+            signature_style: "Enthusiastic advocate who demolishes pheromone skepticism with evidence and results. Blends alpha mindset philosophy with cutting-edge pheromone science to help readers achieve social and romantic dominance.",
             created_at: new Date().toISOString(),
             topic_area: "all",
             style: "informative-edgy"
@@ -149,20 +149,61 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
         });
         const topicEmbedding = embeddingResponse.data[0];
 
-        // Query Vectorize for the most similar articles
-        const similarArticles = await this.env.VECTORIZE_INDEX.query(topicEmbedding, { topK: 7 });
-        const internalLinks = similarArticles.matches.map(match => ({
-            url: match.vector.metadata.url,
-            title: match.vector.metadata.title,
-            primaryKeyword: match.vector.metadata.primaryKeyword, // Pass the primary keyword to the prompt
-            score: match.score,
-        }));
+        // Query Vectorize for the most similar content (blogs, products, collections)
+        const similarContent = await this.env.VECTORIZE_INDEX.query(topicEmbedding, { 
+            topK: 20,
+            filter: { contentType: { $in: ['blog', 'product', 'collection'] } }
+        });
+        
+        // Validate and filter results
+        const validLinks = similarContent.matches
+            .filter(match => {
+                const url = match.vector.metadata?.url;
+                const contentType = match.vector.metadata?.contentType;
+                // Basic URL validation and ensure we have required metadata
+                return url && 
+                       url.startsWith('https://royalpheromones.com') && 
+                       contentType &&
+                       match.vector.metadata?.title &&
+                       match.vector.metadata?.primaryKeyword;
+            })
+            .map(match => ({
+                url: match.vector.metadata.url,
+                title: match.vector.metadata.title,
+                primaryKeyword: match.vector.metadata.primaryKeyword,
+                contentType: match.vector.metadata.contentType,
+                score: match.score,
+            }))
+            .slice(0, 10); // Take top 10 after filtering
+        
+        // Add fallback links if vectorize is empty or has few results
+        const fallbackLinks = [];
+        if (validLinks.length < 5) {
+            fallbackLinks.push(
+                {
+                    url: 'https://royalpheromones.com/collections/mens-pheromone-colognes',
+                    title: 'Men\'s Pheromone Colognes',
+                    primaryKeyword: 'pheromone colognes for men',
+                    contentType: 'collection',
+                    score: 0.7
+                },
+                {
+                    url: 'https://royalpheromones.com/collections/womens-pheromone-perfumes', 
+                    title: 'Women\'s Pheromone Perfumes',
+                    primaryKeyword: 'pheromone perfumes for women',
+                    contentType: 'collection',
+                    score: 0.6
+                }
+            );
+        }
+        
+        const internalLinks = [...validLinks, ...fallbackLinks].slice(0, 10);
 
         const systemPrompt = `
 You are a ghostwriter, fully embodying the persona of ${persona.name}. Your task is to write a comprehensive, SEO-optimized, 1500-word blog post for the Royal Pheromones blog on the topic of "${topic}".
 
 **Brand Context:**
-The blog is for Royal Pheromones. The content must be informative, engaging, and build trust, while aligning with the company's mission. Your writing should be natural, realistic, and human.
+The blog is for Royal Pheromones, the premier destination for Liquid Alchemy Labs pheromone products. Your content must be strongly PRO-PHEROMONE and enthusiastically promote the effectiveness of quality pheromone products. You are a passionate advocate, not a skeptic. Present pheromones as powerful, scientifically-backed tools for attraction and social success. Build excitement and confidence in pheromone technology.
 
 **Your Persona: Alexa Velinxs**
 - **Background:** ${persona.background}
@@ -175,22 +216,41 @@ You MUST use the following web research as the primary source for your article.
 ${JSON.stringify(researchData.research_content)}
 </research>
 
-**Internal Linking Strategy:**
-This is crucial. You must naturally weave in contextual internal links to other pages on the Royal Pheromones site. Here is a list of the most contextually relevant articles from our blog, identified by a semantic similarity search. Each link includes a 'primaryKeyword' (from its H1 tag). Use this keyword to create natural, context-aware anchor text. Do not just use the full title as the anchor text. Link to at least 3-5 of them where it provides the most value to the reader.
+**Internal Linking Strategy - CRITICAL:**
+You MUST include multiple contextual internal links throughout your article. Here are contextually relevant pages from the Royal Pheromones site identified by semantic similarity:
+
+- **Collection pages** (HIGH PRIORITY) - Link when discussing product categories, types of pheromones, or shopping recommendations
+- **Product pages** (HIGH PRIORITY) - Link when mentioning specific products, ingredients, or making recommendations  
+- **Blog articles** - Link when referencing topics, research, or providing additional reading
+
+Each link includes a 'primaryKeyword' and 'contentType'. Use the primaryKeyword to create natural, context-aware anchor text that fits the flow. You should include at least 5-7 contextual internal links in addition to any product placements. Be aggressive about linking - every relevant mention should have a link. NEVER use the same URL more than once in a single article.
+
+CRITICAL: ONLY use URLs from the provided links list below. Do NOT create or guess URLs. All links have been validated and are guaranteed to work. If you need more variety, be creative with different anchor text for the same categories.
+
 <links>
 ${JSON.stringify(internalLinks)}
 </links>
 
 **Content Requirements:**
 1.  **Length:** ~1500 words.
-2.  **SEO:** Use "${topic}" as the primary keyword. Include related keywords from your research. Use a clear heading structure (H1, H2, H3).
-3.  **Formatting:** The 'content' field must be a single Markdown string.
+2.  **SEO OPTIMIZATION (CRITICAL):** 
+   - Use "${topic}" as the primary keyword throughout the article (aim for 1-2% density)
+   - Include the primary keyword in: H1 title, first paragraph, at least 2 H2 headings, and conclusion
+   - Sprinkle related secondary keywords naturally throughout: variations of the main topic, synonyms, and LSI keywords from your research
+   - Use semantic keyword variations (e.g., "pheromone cologne" → "pheromone fragrance", "attraction scent", "magnetic cologne")
+   - Include long-tail keyword variations in subheadings and body text
+   - Use a clear heading structure (H1, H2, H3) with keywords in headings where natural
+3.  **Formatting:** The 'content' field must be a single HTML string with proper tags (h1, h2, h3, p, strong, em, a, img).
 4.  **Tone:** Write from your persona's first-person perspective ("I", "my").
+5.  **Images:** Include 2-3 relevant images using this format: <img src="https://images.unsplash.com/photo-PHOTOID?w=800&h=400&fit=crop" alt="Alt text" style="width: 100%; max-width: 800px; height: auto; margin: 20px 0; border-radius: 8px;">. Use search terms like "cologne", "perfume", "attraction", "confidence", "dating" to find appropriate photo IDs from Unsplash.
+6.  **Stance:** Be enthusiastically PRO-PHEROMONE. Present pheromones as effective, scientifically-backed tools. Counter skepticism with confidence and results.
 
 **JSON Output Structure:**
 - "title": SEO-friendly title.
 - "meta_description": 150-160 character meta description.
-- "content": The full 1500-word blog post as a single Markdown string.
+- "summary": 2-3 sentence compelling summary/excerpt of the article.
+- "handle": Short, clean URL slug based on primary keyword (e.g., "best-pheromone-cologne" for "best pheromone cologne for men").
+- "content": The full 1500-word blog post as a single HTML string (no markdown, pure HTML).
 - "tags": An array of 5-7 relevant SEO tags.
 `;
 
@@ -204,46 +264,73 @@ ${JSON.stringify(internalLinks)}
     }
 
     /**
-     * Converts a Markdown string into a basic HTML string.
-     * @param markdown The Markdown content from OpenAI.
-     * @returns An HTML string.
+     * Creates a clean URL handle from a topic/keyword.
+     * @param topic The topic/keyword to convert to a handle.
+     * @returns Clean URL handle.
      */
-    private markdownToHtml(markdown: string): string {
-        if (typeof markdown !== 'string') {
-            return JSON.stringify(markdown); // Fallback for unexpected types
+    private createHandle(topic: string): string {
+        return topic
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, '') // Remove special characters
+            .replace(/\s+/g, '-') // Replace spaces with hyphens
+            .replace(/-+/g, '-') // Replace multiple hyphens with single
+            .replace(/^-|-$/g, '') // Remove leading/trailing hyphens
+            .substring(0, 50); // Limit length
+    }
+
+    /**
+     * Sanitizes HTML content to remove unnecessary elements and keep only blog post content.
+     * @param html The HTML content from OpenAI.
+     * @returns Clean HTML string suitable for Shopify blog posts.
+     */
+    private sanitizeHtml(html: string): string {
+        if (typeof html !== 'string') {
+            return JSON.stringify(html); // Fallback for unexpected types
         }
-        return markdown
-            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-            .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
-            .replace(/\*(.*)\*/gim, '<em>$1</em>')
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/gim, '<a href="$2">$1</a>')
-            .replace(/\n/gim, '<br>');
+        
+        let cleanHtml = html
+            // Remove doctype, html, head, body tags if present
+            .replace(/<!DOCTYPE[^>]*>/gi, '')
+            .replace(/<\/?html[^>]*>/gi, '')
+            .replace(/<\/?head[^>]*>/gi, '')
+            .replace(/<\/?body[^>]*>/gi, '')
+            .replace(/<\/?meta[^>]*>/gi, '')
+            .replace(/<\/?title[^>]*>/gi, '')
+            .replace(/<\/?link[^>]*>/gi, '')
+            .replace(/<\/?script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<\/?style[^>]*>[\s\S]*?<\/style>/gi, '')
+            // Remove markdown code block wrappers if they exist
+            .replace(/^```[\s\S]*?\n/, '')
+            .replace(/\n```$/, '')
+            .replace(/^```html\s*/, '')
+            .replace(/^```markdown\s*/, '')
+            .replace(/^```\s*/, '')
+            // Clean up extra whitespace
+            .trim();
+            
+        return cleanHtml;
     }
 
     async createBlogPost(blogId: number, contentData: any, published: boolean, topic: string) {
         console.log('Content received from OpenAI:', JSON.stringify(contentData, null, 2));
         
-        // 1. Convert the markdown content to an HTML string for product integration context
-        const markdownContent = contentData.content;
-        let enhancedContent = markdownContent;
+        // 1. Sanitize HTML content to remove unnecessary elements
+        let htmlContent = this.sanitizeHtml(contentData.content);
 
         // 2. Add product ad contextually using AI
-        const products = await this.productIntegrator.findRelevantProducts(contentData.keyword, markdownContent.substring(0, 500), 1);
+        const products = await this.productIntegrator.findRelevantProducts(contentData.keyword, htmlContent.substring(0, 500), 1);
         if (products.length > 0) {
-            enhancedContent = await this.productIntegrator.generateContextualProductPlacement(enhancedContent, products);
+            htmlContent = await this.productIntegrator.generateContextualProductPlacement(htmlContent, products);
         } else {
             console.warn(`No relevant products found for keyword: ${contentData.keyword}.`);
         }
-        
-        // 4. Convert the final Markdown to HTML for Shopify
-        const finalHtmlContent = this.markdownToHtml(enhancedContent);
 
         const articlePayload = {
-            ...contentData,
             title: contentData.title || topic, // Fallback to topic if title is missing
-            body_html: finalHtmlContent,
+            body_html: htmlContent,
+            summary_html: contentData.summary || contentData.meta_description || 'Discover the power of pheromones with Royal Pheromones.',
+            handle: contentData.handle || this.createHandle(topic), // Clean URL slug
+            tags: Array.isArray(contentData.tags) ? contentData.tags.join(', ') : (contentData.tags || ''),
             published
         };
         const article = await this.shopify.createBlogPost(blogId, articlePayload);

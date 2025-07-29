@@ -53,7 +53,7 @@ export async function fetchAllSiteUrls() {
   const sitemapUrls = {
     blogs: 'https://royalpheromones.com/sitemap_blogs_1.xml',
     products: 'https://royalpheromones.com/sitemap_products_1.xml',
-    collections: 'https://royalpheromones.com/sitemap_collections_1.xml',
+    collections: 'https://royalpheromones.com/sitemap_collections_1.xml?from=272732946526&to=276353908830',
   };
 
   const [blogPosts, products, collections] = await Promise.all([
