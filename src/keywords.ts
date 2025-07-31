@@ -91,6 +91,72 @@ export class KeywordManager {
     `;
   }
 
+  async getUsedKeywords(): Promise<Keyword[]> {
+    return this.agent.sql<Keyword[]>`
+      SELECT * FROM keywords
+      WHERE status = 'used'
+      ORDER BY created_date DESC;
+    `;
+  }
+
+  async getAllKeywords(): Promise<Keyword[]> {
+    return this.agent.sql<Keyword[]>`
+      SELECT * FROM keywords
+      ORDER BY created_date DESC;
+    `;
+  }
+
+  async researchComplementaryKeywords(topic: string, count: number, niche: string, existingKeywords: string[]): Promise<Keyword[]> {
+    const existingList = existingKeywords.slice(0, 50).join(', '); // Limit to prevent prompt overflow
+    
+    const prompt = `Research ${count} COMPLEMENTARY keywords for the topic "${topic}" in the "${niche}" niche. 
+    
+Here are existing keywords/topics we already have content for:
+${existingList}
+
+Generate NEW keywords that:
+1. COMPLEMENT existing content (can naturally link to it)
+2. Cover RELATED but UNCOVERED angles and subtopics
+3. Build content clusters around existing topics
+4. Explore adjacent topics that would benefit from internal linking
+
+Focus on HIGH SEARCH VOLUME keywords that:
+- Adjacent topics that can link to existing content
+- More specific/niche variations of broad existing topics  
+- Different stages of customer journey (awareness → consideration → purchase)
+- Comparison topics that can reference existing content
+- Problem-solution keywords that can link to existing solutions
+- Seasonal/trending variations of existing topics
+
+CRITICAL: Prioritize keywords that people actually search for:
+- Use real search behavior patterns (what people type in Google)
+- Include buying intent keywords (best, reviews, how to, vs, top, guide)
+- Consider search volume potential - prefer broader appeal over ultra-niche
+- Include question-based keywords (how, what, why, when, where)
+- Mix of head terms (higher volume) and long-tail (easier to rank)
+
+Avoid exact duplicates but DO create content that can naturally reference and link to existing articles.
+
+For each keyword, provide a priority score (1-10 where 10 = high search volume + low competition), user intent, difficulty, and a content angle. Return as a JSON array of objects with keys: keyword, priority_score, intent, difficulty, content_angle.`;
+
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-4.1-mini',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+    });
+
+    const keywordsData = JSON.parse(response.choices[0].message.content || '[]').keywords;
+
+    const keywords: Keyword[] = keywordsData.map((kw: any) => ({
+      ...kw,
+      id: crypto.randomUUID(),
+      status: 'new',
+      created_date: new Date().toISOString(),
+    }));
+
+    return keywords;
+  }
+
   async getKeywordStats(): Promise<any> {
     const total = await this.agent.sql`SELECT COUNT(*) as count FROM keywords;`;
     const newKeywords = await this.agent.sql`SELECT COUNT(*) as count FROM keywords WHERE status = 'new';`;

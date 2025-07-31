@@ -75,4 +75,52 @@ export class ShopifyClient {
     const response = await this.makeShopifyRequest('products.json');
     return response.products;
   }
+
+  async uploadImage(imageData: ArrayBuffer, filename: string): Promise<string> {
+    console.log(`📤 SHOPIFY IMAGE UPLOAD STARTED`);
+    console.log(`📁 Filename: ${filename}`);
+    console.log(`📊 Size: ${Math.round(imageData.byteLength / 1024)}KB`);
+    
+    try {
+      console.log(`🔄 Converting image to base64...`);
+      const conversionStart = Date.now();
+      // Convert ArrayBuffer to base64
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(imageData)));
+      console.log(`✅ Base64 conversion complete (${Date.now() - conversionStart}ms)`);
+      console.log(`📏 Base64 length: ${base64.length} characters`);
+      
+      const imagePayload = {
+        image: {
+          attachment: base64,
+          filename: filename
+        }
+      };
+
+      console.log(`🚀 Sending to Shopify API: themes/assets.json`);
+      const uploadStart = Date.now();
+      const response = await this.makeShopifyRequest('themes/assets.json', 'PUT', imagePayload);
+      console.log(`✅ Shopify upload complete (${Date.now() - uploadStart}ms)`);
+      
+      const finalUrl = `https://${this.shopifyShopUrl.replace('.myshopify.com', '.com')}/files/${filename}`;
+      console.log(`🔗 Final image URL: ${finalUrl}`);
+      
+      return finalUrl;
+    } catch (error) {
+      console.error(`❌ SHOPIFY IMAGE UPLOAD FAILED:`, error);
+      console.error(`   • Filename: ${filename}`);
+      console.error(`   • Size: ${Math.round(imageData.byteLength / 1024)}KB`);
+      console.error(`   • Shop URL: ${this.shopifyShopUrl}`);
+      throw error;
+    }
+  }
+
+  async createBlogPostWithImage(blogId: number, article: any, imageUrl?: string): Promise<any> {
+    if (imageUrl) {
+      article.image = {
+        src: imageUrl
+      };
+    }
+    
+    return this.makeShopifyRequest(`blogs/${blogId}/articles.json`, 'POST', { article });
+  }
 }

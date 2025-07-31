@@ -98,6 +98,17 @@ export class ShopifyAutobloggerAgent extends Agent<Env, AgentState> {
                 return new Response(JSON.stringify(keywords), { headers: { 'Content-Type': 'application/json' } });
             }
 
+            if (path === '/generate-keywords' && request.method === 'POST') {
+                const { topics, keywordsPerTopic, niche } = await request.json();
+                const csvContent = await this.generateKeywordsCsv(topics || ['pheromones', 'attraction', 'dating', 'confidence'], keywordsPerTopic || 25, niche || 'pheromones');
+                return new Response(csvContent, { 
+                    headers: { 
+                        'Content-Type': 'text/csv',
+                        'Content-Disposition': 'attachment; filename="keyword-research.csv"'
+                    } 
+                });
+            }
+
             return new Response('Not found in agent', { status: 404 });
         } catch (e: any) {
             console.error("Error in agent onRequest:", e);
@@ -318,19 +329,49 @@ ${JSON.stringify(internalLinks)}
     }
 
     async createBlogPost(blogId: number, contentData: any, published: boolean, topic: string) {
-        console.log('Content received from OpenAI:', JSON.stringify(contentData, null, 2));
+        const postStart = Date.now();
+        console.log(`\n📝 BLOG POST CREATION STARTED`);
+        console.log(`🎯 Topic: "${topic}"`);
+        console.log(`📰 Title: "${contentData.title || topic}"`);
+        console.log(`🔢 Blog ID: ${blogId}`);
+        console.log(`📢 Published: ${published}`);
         
         // 1. Sanitize HTML content to remove unnecessary elements
+        console.log(`🧹 Sanitizing HTML content...`);
+        const sanitizeStart = Date.now();
         let htmlContent = this.sanitizeHtml(contentData.content);
+        const contentLength = htmlContent.length;
+        console.log(`✅ HTML sanitized: ${contentLength} characters (${Date.now() - sanitizeStart}ms)`);
 
         // 2. Add product ad contextually using AI
+        console.log(`🛍️ Finding relevant products...`);
+        const productStart = Date.now();
         const products = await this.productIntegrator.findRelevantProducts(contentData.keyword, htmlContent.substring(0, 500), 1);
         if (products.length > 0) {
+            console.log(`✅ Found ${products.length} relevant products (${Date.now() - productStart}ms)`);
+            console.log(`🔗 Integrating product placements...`);
+            const integrationStart = Date.now();
             htmlContent = await this.productIntegrator.generateContextualProductPlacement(htmlContent, products);
+            console.log(`✅ Products integrated (${Date.now() - integrationStart}ms)`);
         } else {
-            console.warn(`No relevant products found for keyword: ${contentData.keyword}.`);
+            console.warn(`⚠️ No relevant products found for keyword: ${contentData.keyword} (${Date.now() - productStart}ms)`);
         }
 
+        // 3. Generate and upload featured image
+        let featuredImageUrl: string | undefined;
+        try {
+            const imageStart = Date.now();
+            const imageData = await this.generateFeaturedImage(topic, contentData.title || topic);
+            const filename = `blog-${contentData.handle || this.createHandle(topic)}-${Date.now()}.png`;
+            featuredImageUrl = await this.shopify.uploadImage(imageData, filename);
+            console.log(`✅ Featured image complete: ${featuredImageUrl} (${Date.now() - imageStart}ms)`);
+        } catch (error) {
+            console.error(`⚠️ Featured image failed, continuing without image:`, error.message);
+            // Continue without image rather than failing the whole post
+        }
+
+        // 4. Prepare article payload
+        console.log(`📦 Preparing article payload...`);
         const articlePayload = {
             title: contentData.title || topic, // Fallback to topic if title is missing
             body_html: htmlContent,
@@ -339,15 +380,311 @@ ${JSON.stringify(internalLinks)}
             tags: Array.isArray(contentData.tags) ? contentData.tags.join(', ') : (contentData.tags || ''),
             published
         };
-        const article = await this.shopify.createBlogPost(blogId, articlePayload);
+        console.log(`📋 Article details:`);
+        console.log(`   • Handle: ${articlePayload.handle}`);
+        console.log(`   • Content length: ${htmlContent.length} chars`);
+        console.log(`   • Tags: ${articlePayload.tags}`);
+        console.log(`   • Has featured image: ${!!featuredImageUrl}`);
+
+        // 5. Create blog post with featured image
+        console.log(`🚀 Creating Shopify blog post...`);
+        const shopifyStart = Date.now();
+        const article = await this.shopify.createBlogPostWithImage(blogId, articlePayload, featuredImageUrl);
+        console.log(`✅ Blog post created in Shopify (${Date.now() - shopifyStart}ms)`);
+        console.log(`🔗 Article ID: ${article?.id}`);
+        console.log(`🌐 Article URL: https://royalpheromones.com/blogs/articles/${articlePayload.handle}`);
         
-        // 5. Mark keyword as used with the new article URL
+        // 6. Mark keyword as used with the new article URL
         if (article && article.id && contentData.keyword) {
-            // Assuming a standard Shopify URL structure
+            console.log(`📊 Marking keyword as used...`);
+            const keywordStart = Date.now();
             const articleUrl = `https://royalpheromones.com/blogs/articles/${article.handle}`;
             await this.keywordManager.markKeywordUsed(contentData.keyword, article.id.toString(), articleUrl);
+            console.log(`✅ Keyword marked as used (${Date.now() - keywordStart}ms)`);
         }
+        
+        const totalTime = Date.now() - postStart;
+        console.log(`\n🎉 BLOG POST CREATION COMPLETE!`);
+        console.log(`⏱️ Total time: ${totalTime}ms (${(totalTime/1000).toFixed(1)}s)`);
+        console.log(`📄 Final article: ${article?.id ? 'SUCCESS' : 'FAILED'}`);
+        
         return article;
+    }
+
+    /**
+     * Generates a comprehensive keyword research CSV with user prompts for automation
+     */
+    async generateKeywordsCsv(topics: string[], keywordsPerTopic: number, niche: string): Promise<string> {
+        const startTime = Date.now();
+        console.log(`🔍 KEYWORD GENERATION STARTED`);
+        console.log(`📋 Topics: ${topics.join(', ')}`);
+        console.log(`🎯 Keywords per topic: ${keywordsPerTopic}`);
+        console.log(`🏷️ Niche: ${niche}`);
+        
+        // First, get all existing content keywords to avoid duplicates
+        console.log(`📊 Fetching existing content from vectorize...`);
+        const existingStart = Date.now();
+        const existingKeywords = await this.getExistingContentKeywords();
+        console.log(`✅ Found ${existingKeywords.length} existing keywords (${Date.now() - existingStart}ms)`);
+        console.log(`📝 Sample existing keywords: ${existingKeywords.slice(0, 5).join(', ')}...`);
+        
+        let allKeywordData: Array<{keyword: string, topic: string, userPrompt: string}> = [];
+        
+        // Research keywords for each topic, informing the AI about what already exists
+        for (let i = 0; i < topics.length; i++) {
+            const topic = topics[i];
+            console.log(`\n🔍 Processing topic ${i + 1}/${topics.length}: "${topic}"`);
+            
+            const topicStart = Date.now();
+            console.log(`🤖 Generating ${keywordsPerTopic} complementary keywords...`);
+            const keywords = await this.keywordManager.researchComplementaryKeywords(
+                topic, 
+                keywordsPerTopic, 
+                niche, 
+                existingKeywords
+            );
+            console.log(`✅ Generated ${keywords.length} initial keywords (${Date.now() - topicStart}ms)`);
+            
+            // Double-check filtering (shouldn't be needed but safety net)
+            console.log(`🔍 Filtering against existing content...`);
+            const filterStart = Date.now();
+            const unusedKeywords = await this.filterUnusedKeywords(keywords);
+            console.log(`✅ ${unusedKeywords.length}/${keywords.length} keywords passed filtering (${Date.now() - filterStart}ms)`);
+            
+            console.log(`💡 Generating user prompts for ${unusedKeywords.length} keywords...`);
+            const promptStart = Date.now();
+            for (let j = 0; j < unusedKeywords.length; j++) {
+                const keywordObj = unusedKeywords[j];
+                console.log(`  📝 ${j + 1}/${unusedKeywords.length}: "${keywordObj.keyword}"`);
+                const userPrompt = await this.generateUserPromptForKeyword(keywordObj.keyword, topic, niche);
+                allKeywordData.push({
+                    keyword: keywordObj.keyword,
+                    topic: topic,
+                    userPrompt: userPrompt
+                });
+            }
+            console.log(`✅ User prompts generated (${Date.now() - promptStart}ms)`);
+        }
+        
+        // Sort by topic for organization
+        allKeywordData.sort((a, b) => {
+            if (a.topic !== b.topic) return a.topic.localeCompare(b.topic);
+            return a.keyword.localeCompare(b.keyword);
+        });
+        
+        // Generate CSV content
+        let csvContent = 'keyword,user_prompt,topic\n';
+        
+        let currentTopic = '';
+        for (const item of allKeywordData) {
+            // Add topic separator comment
+            if (item.topic !== currentTopic) {
+                csvContent += `\n# --- ${item.topic.toUpperCase()} KEYWORDS ---\n`;
+                currentTopic = item.topic;
+            }
+            
+            // Escape quotes and commas in CSV
+            const escapedKeyword = `"${item.keyword.replace(/"/g, '""')}"`;
+            const escapedPrompt = `"${item.userPrompt.replace(/"/g, '""')}"`;
+            const escapedTopic = `"${item.topic.replace(/"/g, '""')}"`;
+            
+            csvContent += `${escapedKeyword},${escapedPrompt},${escapedTopic}\n`;
+        }
+        
+        const totalTime = Date.now() - startTime;
+        console.log(`\n🎉 KEYWORD GENERATION COMPLETE!`);
+        console.log(`📊 Final Results:`);
+        console.log(`   • Total keywords: ${allKeywordData.length}`);
+        console.log(`   • Topics processed: ${topics.length}`);
+        console.log(`   • Total time: ${totalTime}ms (${(totalTime/1000).toFixed(1)}s)`);
+        console.log(`   • Avg per keyword: ${(totalTime/allKeywordData.length).toFixed(0)}ms`);
+        
+        // Show breakdown by topic
+        const topicCounts = allKeywordData.reduce((acc, item) => {
+            acc[item.topic] = (acc[item.topic] || 0) + 1;
+            return acc;
+        }, {} as Record<string, number>);
+        console.log(`📋 Topic breakdown:`, topicCounts);
+        
+        return csvContent;
+    }
+    
+    /**
+     * Generates a contextual user prompt for a specific keyword
+     */
+    private async generateUserPromptForKeyword(keyword: string, topic: string, niche: string): Promise<string> {
+        const systemPrompt = `You are a content strategy expert for Royal Pheromones. Generate a concise, specific user prompt (1-2 sentences) that will guide the AI writer to create the most effective blog post for this keyword.
+
+Focus on:
+- What angle/approach to take
+- What to emphasize or highlight
+- Any specific product categories to mention
+- Tone adjustments (scientific, practical, beginner-friendly, etc.)
+- Target audience considerations
+
+Keep prompts under 150 characters to be practical for CSV processing.`;
+
+        const response = await this.openai.chat.completions.create({
+            model: 'gpt-4.1-mini',
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: `Generate a user prompt for keyword: "${keyword}" in topic: "${topic}" for ${niche} niche` }
+            ],
+            max_tokens: 100,
+            temperature: 0.7
+        });
+        
+        return response.choices[0].message.content?.trim() || `Focus on practical advice and product recommendations for ${keyword}`;
+    }
+    
+    /**
+     * Filters out keywords that are already covered by existing content in vectorize
+     */
+    private async filterUnusedKeywords(keywords: any[]): Promise<any[]> {
+        const unusedKeywords = [];
+        const similarityThreshold = 0.95; // Very high similarity means exact duplicate (lowered from 0.8)
+        
+        for (const keywordObj of keywords) {
+            const keyword = keywordObj.keyword;
+            
+            // Generate embedding for the keyword
+            const embeddingResponse = await this.env.AI.run('@cf/baai/bge-base-en-v1.5', {
+                text: [keyword]
+            });
+            const keywordEmbedding = embeddingResponse.data[0];
+            
+            // Query vectorize for similar content
+            const similarContent = await this.env.VECTORIZE_INDEX.query(keywordEmbedding, { 
+                topK: 5,
+                filter: { contentType: { $in: ['blog'] } } // Only check against existing blog posts
+            });
+            
+            // Check if any existing content is very similar to this keyword
+            const hasVerySimilarContent = similarContent.matches.some(match => 
+                match.score > similarityThreshold
+            );
+            
+            // Also check exact keyword match in titles and primary keywords
+            const hasExactMatch = similarContent.matches.some(match => {
+                const title = match.vector.metadata?.title?.toLowerCase() || '';
+                const primaryKeyword = match.vector.metadata?.primaryKeyword?.toLowerCase() || '';
+                const keywordLower = keyword.toLowerCase();
+                
+                return title.includes(keywordLower) || 
+                       primaryKeyword.includes(keywordLower) ||
+                       keywordLower.includes(primaryKeyword);
+            });
+            
+            // Keep keyword if it's not covered by existing content
+            if (!hasVerySimilarContent && !hasExactMatch) {
+                unusedKeywords.push(keywordObj);
+            } else {
+                console.log(`Filtered out keyword "${keyword}" - already covered by existing content`);
+            }
+        }
+        
+        return unusedKeywords;
+    }
+    
+    /**
+     * Gets all existing content keywords from vectorize to avoid regenerating similar content
+     */
+    private async getExistingContentKeywords(): Promise<string[]> {
+        // Query vectorize to get a sample of existing content
+        const sampleQuery = await this.env.VECTORIZE_INDEX.query(
+            new Array(1536).fill(0), // Dummy embedding to get random results
+            { 
+                topK: 500, // Get a large sample of existing content
+                filter: { contentType: { $in: ['blog'] } }
+            }
+        );
+        
+        const existingKeywords: string[] = [];
+        
+        for (const match of sampleQuery.matches) {
+            const metadata = match.vector.metadata;
+            if (metadata?.title) {
+                existingKeywords.push(metadata.title);
+            }
+            if (metadata?.primaryKeyword) {
+                existingKeywords.push(metadata.primaryKeyword);
+            }
+        }
+        
+        // Also get from our SQL database if any keywords were tracked there
+        try {
+            const dbKeywords = await this.keywordManager.getAllKeywords();
+            existingKeywords.push(...dbKeywords.map(k => k.keyword));
+        } catch (e) {
+            console.log('No existing keywords in database yet');
+        }
+        
+        // Remove duplicates and return
+        return [...new Set(existingKeywords.map(k => k.toLowerCase()))];
+    }
+
+    /**
+     * Generates a featured image using DALL-E 3 for the blog post
+     */
+    private async generateFeaturedImage(topic: string, title: string): Promise<ArrayBuffer> {
+        console.log(`🎨 DALL-E 3 IMAGE GENERATION STARTED`);
+        console.log(`📷 Topic: "${topic}"`);
+        console.log(`📝 Title: "${title}"`);
+        
+        const imagePrompt = `Create a professional, modern featured image for a blog post about "${topic}". 
+
+Style: Clean, sophisticated design with:
+- Professional background (gradient, subtle texture, or solid color)
+- Bold, readable text overlay with the title: "${title}"
+- Relevant visual elements (bottles, scientific imagery, or abstract graphics related to pheromones/attraction)
+- Brand colors: deep blues, purples, or elegant neutrals
+- High-quality, blog-worthy aesthetic
+- 16:9 aspect ratio, suitable for social media sharing
+
+The image should look professional and trustworthy, suitable for a science-based blog about pheromones and attraction.`;
+
+        console.log(`🤖 Sending request to DALL-E 3...`);
+        console.log(`📏 Size: 1792x1024 (16:9 ratio)`);
+        console.log(`⚡ Quality: standard`);
+
+        try {
+            const generateStart = Date.now();
+            const response = await this.openai.images.generate({
+                model: "dall-e-3",
+                prompt: imagePrompt,
+                n: 1,
+                size: "1792x1024", // 16:9 aspect ratio
+                quality: "standard"
+            });
+            console.log(`✅ DALL-E 3 generation complete (${Date.now() - generateStart}ms)`);
+
+            const imageUrl = response.data[0].url;
+            if (!imageUrl) {
+                throw new Error('No image URL returned from DALL-E 3');
+            }
+            console.log(`🔗 Generated image URL: ${imageUrl.substring(0, 50)}...`);
+
+            // Download the image
+            console.log(`⬇️ Downloading generated image...`);
+            const downloadStart = Date.now();
+            const imageResponse = await fetch(imageUrl);
+            if (!imageResponse.ok) {
+                throw new Error(`Failed to download generated image: ${imageResponse.status} ${imageResponse.statusText}`);
+            }
+            
+            const imageBuffer = await imageResponse.arrayBuffer();
+            const imageSizeKB = Math.round(imageBuffer.byteLength / 1024);
+            console.log(`✅ Image downloaded: ${imageSizeKB}KB (${Date.now() - downloadStart}ms)`);
+
+            return imageBuffer;
+        } catch (error) {
+            console.error(`❌ IMAGE GENERATION FAILED:`, error);
+            console.error(`   • Topic: "${topic}"`);
+            console.error(`   • Title: "${title}"`);
+            console.error(`   • Error type: ${error.constructor.name}`);
+            console.error(`   • Error message: ${error.message}`);
+            throw error;
+        }
     }
 }
 
